@@ -266,6 +266,35 @@ class OpenAIGenerator:
         return answer
 
 
+class GeminiGenerator:
+    def __init__(self, max_output_tokens: int = 300) -> None:
+        api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+        self.model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+        if not api_key:
+            raise RuntimeError("GOOGLE_API_KEY is missing from .env")
+        from google import genai
+        self.client = genai.Client(api_key=api_key)
+        self.max_output_tokens = max_output_tokens
+
+    def generate(self, prompt: str) -> str:
+        import time
+        for attempt in range(5):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=prompt,
+                )
+                answer = response.text.strip() if response.text else ""
+                if answer:
+                    return answer
+            except Exception as exc:
+                if attempt == 4:
+                    raise
+                wait_time = 15 if ("429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)) else 2
+                time.sleep(wait_time)
+        raise RuntimeError("Gemini returned an empty answer")
+
+
 @dataclass(frozen=True)
 class DomainResponse:
     question: str
@@ -296,10 +325,17 @@ class DomainAssistant:
         top_k: int = 5,
     ) -> DomainAssistant:
         corpus_id, chunks = load_corpus(corpus_dir)
+        if generator is None:
+            if os.getenv("OPENAI_API_KEY"):
+                generator = OpenAIGenerator()
+            elif os.getenv("GOOGLE_API_KEY"):
+                generator = GeminiGenerator()
+            else:
+                generator = OpenAIGenerator()
         return cls(
             corpus_id,
             BM25Retriever(chunks),
-            generator if generator is not None else OpenAIGenerator(),
+            generator,
             top_k,
         )
 
@@ -443,6 +479,7 @@ def generate_actual_answers(
                 "error": None,
             }
         )
+        time.sleep(3.5)
 
         filled_after = round(20 * percentage)
         bar_after = "#" * filled_after + "-" * (20 - filled_after)
